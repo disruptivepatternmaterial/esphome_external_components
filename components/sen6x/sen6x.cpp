@@ -16,7 +16,7 @@ static const uint16_t SEN5X_CMD_GET_PRODUCT_NAME = 0xD014;  // return 0 bytes
 static const uint16_t SEN5X_CMD_GET_SERIAL_NUMBER = 0xD033;
 static const uint16_t SEN5X_CMD_NOX_ALGORITHM_TUNING = 0x60E1;
 static const uint16_t SEN5X_CMD_READ_MEASUREMENT = 0x0300; //SEN66 only!
-static const uint16_t SEN5X_CMD_RHT_ACCELERATION_MODE = 0x60F7; //not for SEN66 => 0x6100? but seems to read? remove...
+// SEN66 uses 0x6100 SET_TEMPERATURE_ACCELERATION_PARAMETERS (K,P,T1,T2); SEN5x used 0x60F7 RHT_ACCELERATION_MODE - not used here
 static const uint16_t SEN5X_CMD_START_CLEANING_FAN = 0x5607;
 static const uint16_t SEN5X_CMD_START_MEASUREMENTS = 0x0021;
 static const uint16_t SEN5X_CMD_START_MEASUREMENTS_RHT_ONLY = 0x0037; //not used
@@ -72,48 +72,39 @@ void SEN5XComponent::setup() {
       this->serial_number_[2] = static_cast<uint16_t>(raw_serial_number[1] >> 8);
       ESP_LOGD(TAG, "Serial number %02d.%02d.%02d", serial_number_[0], serial_number_[1], serial_number_[2]);
 
-      uint16_t raw_product_name[16];
+      // SEN66: Get Product Name (0xD014) often returns 0 bytes on device; treat as optional and assume SEN66
+      uint16_t raw_product_name[16] = {0};
+      bool product_name_ok =
+          this->get_register(SEN5X_CMD_GET_PRODUCT_NAME, raw_product_name, 16, 20);
 
-      if (!this->get_register(SEN5X_CMD_GET_PRODUCT_NAME, raw_product_name, 16, 20)) {
-        ESP_LOGE(TAG, "Failed to read product name");
-        this->error_code_ = PRODUCT_NAME_FAILED;
-        this->mark_failed();
-        return;
-      }
-
-      // 2 ASCII bytes are encoded in an int
-      const uint16_t *current_int = raw_product_name;
-      char current_char;
-      uint8_t max = 16;
-      do {
-        // first char
-        current_char = *current_int >> 8;
-        if (current_char) {
-          product_name_.push_back(current_char);
-          // second char
-          current_char = *current_int & 0xFF;
-          if (current_char)
+      if (product_name_ok) {
+        const uint16_t *current_int = raw_product_name;
+        char current_char;
+        uint8_t max = 16;
+        do {
+          current_char = *current_int >> 8;
+          if (current_char) {
             product_name_.push_back(current_char);
-        }
-        current_int++;
-      } while (current_char && --max);
+            current_char = *current_int & 0xFF;
+            if (current_char)
+              product_name_.push_back(current_char);
+          }
+          current_int++;
+        } while (current_char && --max);
+      }
+      if (product_name_.empty()) {
+        product_name_ = "SEN66";
+        ESP_LOGD(TAG, "Product name not available, assuming SEN66");
+      }
+      ESP_LOGD(TAG, "Product name: %s", product_name_.c_str());
 
       Sen5xType sen6x_type = UNKNOWN;
       if (product_name_ == "SEN50") {
         sen6x_type = SEN50;
-      } else {
-        if (product_name_ == "SEN54") {
-          sen6x_type = SEN54;
-        } else {
-          if (product_name_ == "SEN55") {
-            sen6x_type = SEN55;
-          }
-        }
-        if (product_name_ == "SEN66" || product_name_ == "") { // emppty name!
-          ESP_LOGD(TAG, "Productname for real: %s", product_name_.c_str());
-          sen6x_type = SEN55; //for now
-        }
-        ESP_LOGD(TAG, "Productname %s", product_name_.c_str());
+      } else if (product_name_ == "SEN54") {
+        sen6x_type = SEN54;
+      } else if (product_name_ == "SEN55" || product_name_ == "SEN66") {
+        sen6x_type = SEN55;  // SEN66 has same feature set as SEN55 (PM, RHT, VOC, NOx, plus CO2)
       }
       if (this->humidity_sensor_ && sen6x_type == SEN50) {
         ESP_LOGE(TAG, "For Relative humidity a SEN54 OR SEN55 is required. You are using a <%s> sensor",
@@ -134,13 +125,14 @@ void SEN5XComponent::setup() {
         this->nox_sensor_ = nullptr;  // mark as not used
       }
 
+      // SEN66 GET_VERSION (0xD100) returns 2 bytes: major, minor (single word)
       if (!this->get_register(SEN5X_CMD_GET_FIRMWARE_VERSION, this->firmware_version_, 20)) {
         ESP_LOGE(TAG, "Failed to read firmware version");
         this->error_code_ = FIRMWARE_FAILED;
         this->mark_failed();
         return;
       }
-      this->firmware_version_ >>= 8;
+      this->firmware_version_ >>= 8;  // use major as version number for display
       ESP_LOGD(TAG, "Firmware version %d", this->firmware_version_);
 
       if (this->voc_sensor_ && this->store_baseline_) {
@@ -297,36 +289,32 @@ void SEN5XComponent::update() {
       ESP_LOGD(TAG, "read data error (%d)", this->last_error_);
       return;
     }
-    float pm_1_0 = measurements[0] / 10.0;
+    // SEN66 0x0300 returns direct mass concentrations (not cumulative like SEN5x): PM1.0, PM2.5, PM4.0, PM10.0 [µg/m³] = value/10
+    float pm_1_0 = measurements[0] / 10.0f;
     if (measurements[0] == 0xFFFF)
       pm_1_0 = NAN;
-    float pm_2_5 = (measurements[1] - measurements[0]) / 10.0;
-    if (measurements[1] == 0xFFFF || measurements[0] == 0xFFFF)
+    float pm_2_5 = measurements[1] / 10.0f;
+    if (measurements[1] == 0xFFFF)
       pm_2_5 = NAN;
-    float pm_4_0 = (measurements[2] - measurements[1]) / 10.0;
-    if (measurements[2] == 0xFFFF || measurements[1] == 0xFFFF)
+    float pm_4_0 = measurements[2] / 10.0f;
+    if (measurements[2] == 0xFFFF)
       pm_4_0 = NAN;
-    float pm_10_0 = (measurements[3] - measurements[2]) / 10.0;
-    if (measurements[3] == 0xFFFF || measurements[2] == 0xFFFF)
+    float pm_10_0 = measurements[3] / 10.0f;
+    if (measurements[3] == 0xFFFF)
       pm_10_0 = NAN;
-    float pm_0_10 = measurements[3] / 10.0;
+    float pm_0_10 = measurements[3] / 10.0f;  // PM ≤10 µm same as PM10.0
     if (measurements[3] == 0xFFFF)
       pm_0_10 = NAN;
-    float humidity = measurements[4] / 100.0;
-    if (measurements[4] == 0xFFFF)
-      humidity = NAN;
-    float temperature = (int16_t) measurements[5] / 200.0;
-    if (measurements[5] == 0xFFFF)
-      temperature = NAN;
-    float voc = measurements[6] / 10.0;
-    if (measurements[6] == 0x7FFF)
-      voc = NAN;
-    float nox = measurements[7] / 10.0;
-    if (measurements[7] == 0x7FFF)
-      nox = NAN;
-    float co2 = measurements[8];
-    if (measurements[8] == 0xFFFF)
-      co2 = NAN;
+    // RHT and gas: int16_t, invalid = 0x7FFF; CO2 uint16_t, invalid = 0xFFFF
+    int16_t raw_humidity = (int16_t) measurements[4];
+    float humidity = (raw_humidity == 0x7FFF) ? NAN : (raw_humidity / 100.0f);
+    int16_t raw_temperature = (int16_t) measurements[5];
+    float temperature = (raw_temperature == 0x7FFF) ? NAN : (raw_temperature / 200.0f);
+    int16_t raw_voc = (int16_t) measurements[6];
+    float voc = (raw_voc == 0x7FFF) ? NAN : (raw_voc / 10.0f);
+    int16_t raw_nox = (int16_t) measurements[7];
+    float nox = (raw_nox == 0x7FFF) ? NAN : (raw_nox / 10.0f);
+    float co2 = (measurements[8] == 0xFFFF) ? NAN : (float) measurements[8];
 
 
     if (this->pm_1_0_sensor_ != nullptr)
