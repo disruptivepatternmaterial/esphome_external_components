@@ -2,6 +2,7 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include <cmath>
 #include <cinttypes>
 #include <span>
 
@@ -290,7 +291,8 @@ void SEN5XComponent::update() {
       ESP_LOGD(TAG, "read data error (%d)", this->last_error_);
       return;
     }
-    // SEN66 0x0300 returns direct mass concentrations (not cumulative like SEN5x): PM1.0, PM2.5, PM4.0, PM10.0 [µg/m³] = value/10
+    // SEN66 0x0300: cumulative mass concentrations [µg/m³] = value/10
+    // PM1.0 = ≤1µm, PM2.5 = ≤2.5µm, PM4.0 = ≤4µm, PM10.0 = ≤10µm (monotonic: PM1 ≤ PM2.5 ≤ PM4 ≤ PM10)
     float pm_1_0 = measurements[0] / 10.0f;
     if (measurements[0] == 0xFFFF)
       pm_1_0 = NAN;
@@ -303,9 +305,14 @@ void SEN5XComponent::update() {
     float pm_10_0 = measurements[3] / 10.0f;
     if (measurements[3] == 0xFFFF)
       pm_10_0 = NAN;
-    float pm_0_10 = measurements[3] / 10.0f;  // PM ≤10 µm same as PM10.0
+    float pm_0_10 = measurements[3] / 10.0f;  // PM ≤10 µm, same as PM10.0
     if (measurements[3] == 0xFFFF)
       pm_0_10 = NAN;
+    if (!std::isnan(pm_1_0) && !std::isnan(pm_2_5) && !std::isnan(pm_4_0) && !std::isnan(pm_10_0) &&
+        (pm_1_0 > pm_2_5 || pm_2_5 > pm_4_0 || pm_4_0 > pm_10_0)) {
+      ESP_LOGW(TAG, "PM values not monotonic (possible read glitch): %.1f %.1f %.1f %.1f",
+               pm_1_0, pm_2_5, pm_4_0, pm_10_0);
+    }
     // RHT and gas: int16_t, invalid = 0x7FFF; CO2 uint16_t, invalid = 0xFFFF
     int16_t raw_humidity = (int16_t) measurements[4];
     float humidity = (raw_humidity == 0x7FFF) ? NAN : (raw_humidity / 100.0f);
