@@ -3,6 +3,9 @@
 #include "esphome/core/component.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/sensirion_common/i2c_sensirion.h"
+#include "esphome/components/text_sensor/text_sensor.h"
+#include "esphome/components/switch/switch.h"
+#include "esphome/components/number/number.h"
 #include "esphome/core/application.h"
 #include "esphome/core/preferences.h"
 
@@ -43,6 +46,7 @@ struct TemperatureCompensation {
   int16_t offset;
   int16_t normalized_offset_slope;
   uint16_t time_constant;
+  uint16_t slot;  // SEN66: 0..4, default 0
 };
 
 class SEN5XComponent : public PollingComponent, public sensirion_common::SensirionI2CDevice {
@@ -90,18 +94,30 @@ class SEN5XComponent : public PollingComponent, public sensirion_common::Sensiri
     tuning_params.gain_factor = gain_factor;
     nox_tuning_params_ = tuning_params;
   }
-  void set_temperature_compensation(float offset, float normalized_offset_slope, uint16_t time_constant) {
+  void set_temperature_compensation(float offset, float normalized_offset_slope, uint16_t time_constant,
+                                    uint16_t slot = 0) {
     TemperatureCompensation temp_comp;
     temp_comp.offset = offset * 200;
     temp_comp.normalized_offset_slope = normalized_offset_slope * 10000;
     temp_comp.time_constant = time_constant;
+    temp_comp.slot = (slot > 4) ? 0 : slot;
     temperature_compensation_ = temp_comp;
   }
   bool start_fan_cleaning();
 
+  void set_device_status_text_sensor(text_sensor::TextSensor *t) { device_status_text_sensor_ = t; }
+  void perform_forced_co2_recalibration(uint16_t target_ppm);
+  void set_co2_asc(bool enable);
+  void set_asc_switch(switch_::Switch *s) { asc_switch_ = s; }
+  void set_altitude(uint16_t altitude_m);
+  void set_altitude_number(number::Number *n) { altitude_number_ = n; }
+
  protected:
   bool write_tuning_parameters_(uint16_t i2c_command, const GasTuning &tuning);
   bool write_temperature_compensation_(const TemperatureCompensation &compensation);
+  std::string format_device_status_(uint32_t status) const;
+  bool read_co2_asc_(bool &enabled);
+  bool read_altitude_(uint16_t &altitude_m);
   ERRORCODE error_code_;
   bool initialized_{false};
   sensor::Sensor *pm_1_0_sensor_{nullptr};
@@ -116,6 +132,9 @@ class SEN5XComponent : public PollingComponent, public sensirion_common::Sensiri
   // SEN55 only
   sensor::Sensor *nox_sensor_{nullptr};
   sensor::Sensor *co2_sensor_{nullptr};
+  text_sensor::TextSensor *device_status_text_sensor_{nullptr};
+  switch_::Switch *asc_switch_{nullptr};
+  number::Number *altitude_number_{nullptr};
 
   std::string product_name_;
   uint8_t serial_number_[4];
@@ -127,6 +146,24 @@ class SEN5XComponent : public PollingComponent, public sensirion_common::Sensiri
   optional<GasTuning> voc_tuning_params_;
   optional<GasTuning> nox_tuning_params_;
   optional<TemperatureCompensation> temperature_compensation_;
+};
+
+class Sen66ASCSwitch : public switch_::Switch {
+ public:
+  void set_parent(SEN5XComponent *parent) { parent_ = parent; }
+  void write_state(bool state) override;
+
+ protected:
+  SEN5XComponent *parent_{nullptr};
+};
+
+class Sen66AltitudeNumber : public number::Number {
+ public:
+  void set_parent(SEN5XComponent *parent) { parent_ = parent; }
+  void control(float value) override;
+
+ protected:
+  SEN5XComponent *parent_{nullptr};
 };
 
 }  // namespace sen6x

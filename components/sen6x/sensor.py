@@ -1,7 +1,7 @@
 from esphome import automation
 from esphome.automation import maybe_simple_id
 import esphome.codegen as cg
-from esphome.components import i2c, sensirion_common, sensor
+from esphome.components import i2c, sensirion_common, sensor, text_sensor, switch, number
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_HUMIDITY,
@@ -42,7 +42,8 @@ sen6x_ns = cg.esphome_ns.namespace("sen6x")
 SEN5XComponent = sen6x_ns.class_(
     "SEN5XComponent", cg.PollingComponent, sensirion_common.SensirionI2CDevice
 )
-
+Sen66ASCSwitch = sen6x_ns.class_("Sen66ASCSwitch", switch.Switch)
+Sen66AltitudeNumber = sen6x_ns.class_("Sen66AltitudeNumber", number.Number)
 
 CONF_ALGORITHM_TUNING = "algorithm_tuning"
 CONF_GAIN_FACTOR = "gain_factor"
@@ -57,10 +58,18 @@ CONF_TIME_CONSTANT = "time_constant"
 CONF_VOC = "voc"
 CONF_VOC_BASELINE = "voc_baseline"
 CONF_CO2 = "co2"
+CONF_DEVICE_STATUS = "device_status"
+CONF_SLOT = "slot"
+CONF_CO2_AUTOMATIC_SELF_CALIBRATION = "co2_automatic_self_calibration"
+CONF_ALTITUDE = "altitude"
+CONF_TARGET_PPM = "target_ppm"
 
 
 # Actions
 StartFanAction = sen6x_ns.class_("StartFanAction", automation.Action)
+PerformCo2RecalibrationAction = sen6x_ns.class_(
+    "PerformCo2RecalibrationAction", automation.Action
+)
 
 
 
@@ -167,8 +176,25 @@ CONFIG_SCHEMA = (
                         float_previously_pct, cv.float_
                     ),
                     cv.Optional(CONF_TIME_CONSTANT, default=0): cv.int_,
+                    cv.Optional(CONF_SLOT, default=0): cv.int_range(0, 4),
                 }
-            )
+            ),
+            cv.Optional(CONF_DEVICE_STATUS): text_sensor.text_sensor_schema(
+                icon="mdi:information-outline",
+            ),
+            cv.Optional(CONF_CO2_AUTOMATIC_SELF_CALIBRATION): switch.switch_schema(
+                Sen66ASCSwitch,
+                icon="mdi:molecule-co2",
+            ),
+            cv.Optional(CONF_ALTITUDE): number.NUMBER_SCHEMA.extend(
+                {
+                    cv.GenerateID(): cv.declare_id(Sen66AltitudeNumber),
+                    cv.Optional("min_value", default=0): cv.float_,
+                    cv.Optional("max_value", default=3000): cv.float_,
+                    cv.Optional("step", default=1): cv.positive_float,
+                    cv.Optional("unit_of_measurement", default="m"): cv.string_strict,
+                }
+            ),
         }
     )
     .extend(cv.polling_component_schema("60s"))
@@ -230,13 +256,31 @@ async def to_code(config):
             )
         )
     if CONF_TEMPERATURE_COMPENSATION in config:
+        tc = config[CONF_TEMPERATURE_COMPENSATION]
         cg.add(
             var.set_temperature_compensation(
-                config[CONF_TEMPERATURE_COMPENSATION][CONF_OFFSET],
-                config[CONF_TEMPERATURE_COMPENSATION][CONF_NORMALIZED_OFFSET_SLOPE],
-                config[CONF_TEMPERATURE_COMPENSATION][CONF_TIME_CONSTANT],
+                tc[CONF_OFFSET],
+                tc[CONF_NORMALIZED_OFFSET_SLOPE],
+                tc[CONF_TIME_CONSTANT],
+                tc[CONF_SLOT],
             )
         )
+    if CONF_DEVICE_STATUS in config:
+        sens = await text_sensor.new_text_sensor(config[CONF_DEVICE_STATUS])
+        cg.add(var.set_device_status_text_sensor(sens))
+    if CONF_CO2_AUTOMATIC_SELF_CALIBRATION in config:
+        sw = await switch.new_switch(config[CONF_CO2_AUTOMATIC_SELF_CALIBRATION])
+        cg.add(sw.set_parent(var))
+        cg.add(var.set_asc_switch(sw))
+    if CONF_ALTITUDE in config:
+        num = await number.new_number(
+            config[CONF_ALTITUDE],
+            min_value=config[CONF_ALTITUDE].get("min_value", 0),
+            max_value=config[CONF_ALTITUDE].get("max_value", 3000),
+            step=config[CONF_ALTITUDE].get("step", 1),
+        )
+        cg.add(num.set_parent(var))
+        cg.add(var.set_altitude_number(num))
 
 
 SEN5X_ACTION_SCHEMA = maybe_simple_id(
@@ -249,6 +293,29 @@ SEN5X_ACTION_SCHEMA = maybe_simple_id(
 @automation.register_action(
     "sen6x.start_fan_autoclean", StartFanAction, SEN5X_ACTION_SCHEMA
 )
-async def sen54_fan_to_code(config, action_id, template_arg, args):
+async def sen6x_fan_to_code(config, action_id, template_arg, args):
     paren = await cg.get_variable(config[CONF_ID])
     return cg.new_Pvariable(action_id, template_arg, paren)
+
+
+CO2_RECALIBRATION_ACTION_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_ID): cv.use_id(SEN5XComponent),
+        cv.Optional(CONF_TARGET_PPM, default=400): cv.templatable(
+            cv.int_range(400, 2000)
+        ),
+    }
+)
+
+
+@automation.register_action(
+    "sen6x.perform_forced_co2_recalibration",
+    PerformCo2RecalibrationAction,
+    CO2_RECALIBRATION_ACTION_SCHEMA,
+)
+async def sen6x_co2_recal_to_code(config, action_id, template_arg, args):
+    paren = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, paren)
+    template_ = await cg.templatable(config[CONF_TARGET_PPM], args, float)
+    cg.add(var.set_target_ppm(template_))
+    return var

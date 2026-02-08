@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cinttypes>
 #include <span>
+#include <string>
 
 namespace esphome {
 namespace sen6x {
@@ -28,6 +29,11 @@ static const uint16_t SEN5X_CMD_TEMPERATURE_COMPENSATION = 0x60B2;
 static const uint16_t SEN5X_CMD_VOC_ALGORITHM_STATE = 0x6181;
 static const uint16_t SEN5X_CMD_VOC_ALGORITHM_TUNING = 0x60D0;
 static const uint16_t SEN6X_CMD_RESET = 0xD304;
+// SEN66-only
+static const uint16_t SEN66_CMD_READ_DEVICE_STATUS = 0xD206;
+static const uint16_t SEN66_CMD_FORCED_CO2_RECALIBRATION = 0x6707;
+static const uint16_t SEN66_CMD_CO2_ASC = 0x6711;
+static const uint16_t SEN66_CMD_SENSOR_ALTITUDE = 0x6736;
 
 void SEN5XComponent::setup() {
   ESP_LOGCONFIG(TAG, "Setting up sen6x...");
@@ -184,6 +190,21 @@ void SEN5XComponent::setup() {
         delay(20);
       }
 
+      if (this->asc_switch_) {
+        bool asc_enabled = false;
+        if (this->read_co2_asc_(asc_enabled)) {
+          this->asc_switch_->publish_state(asc_enabled);
+        }
+        delay(20);
+      }
+      if (this->altitude_number_) {
+        uint16_t alt_m = 0;
+        if (this->read_altitude_(alt_m)) {
+          this->altitude_number_->publish_state(alt_m);
+        }
+        delay(20);
+      }
+
       // Finally start sensor measurements
       auto cmd = SEN5X_CMD_START_MEASUREMENTS_RHT_ONLY;
       if (this->pm_1_0_sensor_ || this->pm_2_5_sensor_ || this->pm_4_0_sensor_ || this->pm_10_0_sensor_ || this->pm_0_10_sensor_) {
@@ -243,6 +264,9 @@ void SEN5XComponent::dump_config() {
   LOG_SENSOR("  ", "VOC", this->voc_sensor_);  // SEN54 and SEN55 only
   LOG_SENSOR("  ", "NOx", this->nox_sensor_);  // SEN55 only
   LOG_SENSOR("  ", "CO2", this->co2_sensor_);  // SEN66
+  LOG_TEXT_SENSOR("  ", "Device status", this->device_status_text_sensor_);
+  LOG_SWITCH("  ", "CO2 ASC", this->asc_switch_);
+  LOG_NUMBER("  ", "Altitude", this->altitude_number_);
 }
 
 void SEN5XComponent::update() {
@@ -347,6 +371,18 @@ void SEN5XComponent::update() {
     if (this->co2_sensor_ != nullptr)
       this->co2_sensor_->publish_state(co2);
     this->status_clear_warning();
+
+    if (this->device_status_text_sensor_) {
+      if (this->write_command(SEN66_CMD_READ_DEVICE_STATUS)) {
+        this->set_timeout(20, [this]() {
+          uint16_t raw[2];
+          if (this->read_data(raw, 2)) {
+            uint32_t s = (uint32_t) raw[0] << 16 | raw[1];
+            this->device_status_text_sensor_->publish_state(this->format_device_status_(s));
+          }
+        });
+      }
+    }
   });
 }
 
@@ -366,15 +402,142 @@ bool SEN5XComponent::write_tuning_parameters_(uint16_t i2c_command, const GasTun
 }
 
 bool SEN5XComponent::write_temperature_compensation_(const TemperatureCompensation &compensation) {
-  uint16_t params[3];
+  uint16_t params[4];
   params[0] = compensation.offset;
   params[1] = compensation.normalized_offset_slope;
   params[2] = compensation.time_constant;
-  if (!write_command(SEN5X_CMD_TEMPERATURE_COMPENSATION, params, 3)) {
+  params[3] = compensation.slot;
+  if (!write_command(SEN5X_CMD_TEMPERATURE_COMPENSATION, params, 4)) {
     ESP_LOGE(TAG, "set temperature_compensation failed. Err=%d", this->last_error_);
     return false;
   }
   return true;
+}
+
+std::string SEN5XComponent::format_device_status_(uint32_t status) const {
+  if (status == 0) {
+    return "Status: OK";
+  }
+  std::string out;
+  if (status & (1u << 4))
+    out += "Fan error; ";
+  if (status & (1u << 6))
+    out += "RHT error; ";
+  if (status & (1u << 7))
+    out += "Gas error; ";
+  if (status & (1u << 9))
+    out += "CO2 error; ";
+  if (status & (1u << 11))
+    out += "PM error; ";
+  if (status & (1u << 21))
+    out += "Fan speed warning; ";
+  if (out.empty()) {
+    out = "Status: 0x" + std::to_string(status);
+  } else {
+    out.resize(out.size() - 2);
+  }
+  return out;
+}
+
+void SEN5XComponent::perform_forced_co2_recalibration(uint16_t target_ppm) {
+  if (target_ppm < 400 || target_ppm > 2000) {
+    ESP_LOGW(TAG, "CO2 recalibration target %u ppm out of range 400..2000", target_ppm);
+    return;
+  }
+  if (!this->write_command(SEN5X_CMD_STOP_MEASUREMENTS)) {
+    this->status_set_warning();
+    ESP_LOGE(TAG, "CO2 recal: stop measurement failed (%d)", this->last_error_);
+    return;
+  }
+  this->set_timeout(200, [this, target_ppm]() {
+    uint16_t param = target_ppm;
+    if (!this->write_command(SEN66_CMD_FORCED_CO2_RECALIBRATION, &param, 1)) {
+      this->status_set_warning();
+      ESP_LOGE(TAG, "CO2 recal: write failed (%d)", this->last_error_);
+      return;
+    }
+    this->set_timeout(500, [this]() {
+      uint16_t correction;
+      if (this->read_data(correction)) {
+        ESP_LOGI(TAG, "CO2 forced recalibration done, correction raw=0x%04X", correction);
+      }
+      auto cmd = SEN5X_CMD_START_MEASUREMENTS_RHT_ONLY;
+      if (this->pm_1_0_sensor_ || this->pm_2_5_sensor_ || this->pm_4_0_sensor_ ||
+          this->pm_10_0_sensor_ || this->pm_0_10_sensor_) {
+        cmd = SEN5X_CMD_START_MEASUREMENTS;
+      }
+      if (!this->write_command(cmd)) {
+        this->status_set_warning();
+        ESP_LOGE(TAG, "CO2 recal: restart measurement failed (%d)", this->last_error_);
+        return;
+      }
+      this->status_clear_warning();
+      ESP_LOGI(TAG, "CO2 forced recalibration finished");
+    });
+  });
+}
+
+bool SEN5XComponent::read_co2_asc_(bool &enabled) {
+  if (!this->write_command(SEN66_CMD_CO2_ASC)) {
+    return false;
+  }
+  delay(20);
+  uint16_t raw[1];
+  if (!this->read_data(raw, 1)) {
+    return false;
+  }
+  enabled = (raw[0] & 0xFF) != 0;
+  return true;
+}
+
+void SEN5XComponent::set_co2_asc(bool enable) {
+  uint16_t val = enable ? 1 : 0;
+  if (!this->write_command(SEN66_CMD_CO2_ASC, &val, 1)) {
+    this->status_set_warning();
+    ESP_LOGE(TAG, "Set CO2 ASC failed (%d)", this->last_error_);
+    return;
+  }
+  if (this->asc_switch_) {
+    this->asc_switch_->publish_state(enable);
+  }
+  this->status_clear_warning();
+  ESP_LOGI(TAG, "CO2 automatic self-calibration %s", enable ? "enabled" : "disabled");
+}
+
+bool SEN5XComponent::read_altitude_(uint16_t &altitude_m) {
+  if (!this->get_register(SEN66_CMD_SENSOR_ALTITUDE, &altitude_m, 20)) {
+    return false;
+  }
+  return true;
+}
+
+void SEN5XComponent::set_altitude(uint16_t altitude_m) {
+  if (altitude_m > 3000) {
+    ESP_LOGW(TAG, "Altitude %u m clamped to 3000", altitude_m);
+    altitude_m = 3000;
+  }
+  if (!this->write_command(SEN66_CMD_SENSOR_ALTITUDE, &altitude_m, 1)) {
+    this->status_set_warning();
+    ESP_LOGE(TAG, "Set altitude failed (%d)", this->last_error_);
+    return;
+  }
+  if (this->altitude_number_) {
+    this->altitude_number_->publish_state(altitude_m);
+  }
+  this->status_clear_warning();
+  ESP_LOGI(TAG, "Sensor altitude set to %u m", altitude_m);
+}
+
+void Sen66ASCSwitch::write_state(bool state) {
+  if (this->parent_) {
+    this->parent_->set_co2_asc(state);
+  }
+}
+
+void Sen66AltitudeNumber::control(float value) {
+  if (this->parent_) {
+    this->parent_->set_altitude(static_cast<uint16_t>(value));
+  }
 }
 
 bool SEN5XComponent::start_fan_cleaning() {
