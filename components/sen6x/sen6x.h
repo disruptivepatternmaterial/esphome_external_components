@@ -187,10 +187,13 @@ class Sen66ASCSwitch : public switch_::Switch {
 class Sen66AltitudeNumber : public number::Number {
  public:
   void set_parent(SEN5XComponent *parent) { parent_ = parent; }
+  void set_initial_value(uint16_t v) { initial_value_ = static_cast<int>(v); }
+  int get_initial_value() const { return initial_value_; }
   void control(float value) override;
 
  protected:
   SEN5XComponent *parent_{nullptr};
+  int initial_value_{-1};
 };
 #endif
 

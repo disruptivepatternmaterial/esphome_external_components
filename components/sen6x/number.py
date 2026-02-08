@@ -10,6 +10,8 @@ DEPENDENCIES = ["number"]
 Sen66AltitudeNumber = sen6x_ns.class_("Sen66AltitudeNumber", number.Number)
 
 CONF_SEN6X_ID = "sen6x_id"
+CONF_DEFAULT_VALUE = "default_value"
+CONF_INITIAL_VALUE = "initial_value"
 
 CONFIG_SCHEMA = number.number_schema(
     Sen66AltitudeNumber,
@@ -17,6 +19,8 @@ CONFIG_SCHEMA = number.number_schema(
 ).extend(
     {
         cv.Required(CONF_SEN6X_ID): cv.use_id(SEN5XComponent),
+        cv.Optional(CONF_DEFAULT_VALUE): cv.int_range(0, 3000),
+        cv.Optional(CONF_INITIAL_VALUE): cv.int_range(0, 3000),
     }
 )
 
@@ -32,3 +36,7 @@ async def to_code(config):
     )
     cg.add(var.set_parent(parent))
     cg.add(parent.set_altitude_number(var))
+    # default_value or initial_value: set altitude on sensor at setup
+    initial = config.get(CONF_DEFAULT_VALUE, config.get(CONF_INITIAL_VALUE))
+    if initial is not None:
+        cg.add(var.set_initial_value(initial))

@@ -201,6 +201,11 @@ void SEN5XComponent::setup() {
 #endif
 #ifdef SEN6X_USE_ALTITUDE
       if (this->altitude_number_) {
+        int initial = static_cast<Sen66AltitudeNumber *>(this->altitude_number_)->get_initial_value();
+        if (initial >= 0) {
+          this->set_altitude(static_cast<uint16_t>(initial));
+          delay(20);
+        }
         uint16_t alt_m = 0;
         if (this->read_altitude_(alt_m)) {
           this->altitude_number_->publish_state(alt_m);
