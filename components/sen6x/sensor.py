@@ -35,7 +35,7 @@ from esphome.const import (
 )
 
 CODEOWNERS = ["@martgras"]
-DEPENDENCIES = ["i2c", "switch", "number", "text_sensor"]
+DEPENDENCIES = ["i2c"]
 AUTO_LOAD = ["sensirion_common"]
 
 sen6x_ns = cg.esphome_ns.namespace("sen6x")
@@ -214,6 +214,13 @@ SETTING_MAP = {
 
 
 async def to_code(config):
+    if CONF_DEVICE_STATUS in config:
+        cg.add_define("SEN6X_USE_DEVICE_STATUS")
+    if CONF_CO2_AUTOMATIC_SELF_CALIBRATION in config:
+        cg.add_define("SEN6X_USE_ASC_SWITCH")
+    if CONF_ALTITUDE in config:
+        cg.add_define("SEN6X_USE_ALTITUDE")
+
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await i2c.register_i2c_device(var, config)

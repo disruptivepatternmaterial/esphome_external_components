@@ -190,6 +190,7 @@ void SEN5XComponent::setup() {
         delay(20);
       }
 
+#ifdef SEN6X_USE_ASC_SWITCH
       if (this->asc_switch_) {
         bool asc_enabled = false;
         if (this->read_co2_asc_(asc_enabled)) {
@@ -197,6 +198,8 @@ void SEN5XComponent::setup() {
         }
         delay(20);
       }
+#endif
+#ifdef SEN6X_USE_ALTITUDE
       if (this->altitude_number_) {
         uint16_t alt_m = 0;
         if (this->read_altitude_(alt_m)) {
@@ -204,6 +207,7 @@ void SEN5XComponent::setup() {
         }
         delay(20);
       }
+#endif
 
       // Finally start sensor measurements
       auto cmd = SEN5X_CMD_START_MEASUREMENTS_RHT_ONLY;
@@ -264,9 +268,15 @@ void SEN5XComponent::dump_config() {
   LOG_SENSOR("  ", "VOC", this->voc_sensor_);  // SEN54 and SEN55 only
   LOG_SENSOR("  ", "NOx", this->nox_sensor_);  // SEN55 only
   LOG_SENSOR("  ", "CO2", this->co2_sensor_);  // SEN66
+#ifdef SEN6X_USE_DEVICE_STATUS
   LOG_TEXT_SENSOR("  ", "Device status", this->device_status_text_sensor_);
+#endif
+#ifdef SEN6X_USE_ASC_SWITCH
   LOG_SWITCH("  ", "CO2 ASC", this->asc_switch_);
+#endif
+#ifdef SEN6X_USE_ALTITUDE
   LOG_NUMBER("  ", "Altitude", this->altitude_number_);
+#endif
 }
 
 void SEN5XComponent::update() {
@@ -372,6 +382,7 @@ void SEN5XComponent::update() {
       this->co2_sensor_->publish_state(co2);
     this->status_clear_warning();
 
+#ifdef SEN6X_USE_DEVICE_STATUS
     if (this->device_status_text_sensor_) {
       if (this->write_command(SEN66_CMD_READ_DEVICE_STATUS)) {
         this->set_timeout(20, [this]() {
@@ -383,6 +394,7 @@ void SEN5XComponent::update() {
         });
       }
     }
+#endif
   });
 }
 
@@ -414,6 +426,7 @@ bool SEN5XComponent::write_temperature_compensation_(const TemperatureCompensati
   return true;
 }
 
+#ifdef SEN6X_USE_DEVICE_STATUS
 std::string SEN5XComponent::format_device_status_(uint32_t status) const {
   if (status == 0) {
     return "Status: OK";
@@ -438,6 +451,7 @@ std::string SEN5XComponent::format_device_status_(uint32_t status) const {
   }
   return out;
 }
+#endif
 
 void SEN5XComponent::perform_forced_co2_recalibration(uint16_t target_ppm) {
   if (target_ppm < 400 || target_ppm > 2000) {
@@ -477,6 +491,7 @@ void SEN5XComponent::perform_forced_co2_recalibration(uint16_t target_ppm) {
   });
 }
 
+#ifdef SEN6X_USE_ASC_SWITCH
 bool SEN5XComponent::read_co2_asc_(bool &enabled) {
   if (!this->write_command(SEN66_CMD_CO2_ASC)) {
     return false;
@@ -504,6 +519,14 @@ void SEN5XComponent::set_co2_asc(bool enable) {
   ESP_LOGI(TAG, "CO2 automatic self-calibration %s", enable ? "enabled" : "disabled");
 }
 
+void Sen66ASCSwitch::write_state(bool state) {
+  if (this->parent_) {
+    this->parent_->set_co2_asc(state);
+  }
+}
+#endif
+
+#ifdef SEN6X_USE_ALTITUDE
 bool SEN5XComponent::read_altitude_(uint16_t &altitude_m) {
   if (!this->get_register(SEN66_CMD_SENSOR_ALTITUDE, &altitude_m, 20)) {
     return false;
@@ -528,17 +551,12 @@ void SEN5XComponent::set_altitude(uint16_t altitude_m) {
   ESP_LOGI(TAG, "Sensor altitude set to %u m", altitude_m);
 }
 
-void Sen66ASCSwitch::write_state(bool state) {
-  if (this->parent_) {
-    this->parent_->set_co2_asc(state);
-  }
-}
-
 void Sen66AltitudeNumber::control(float value) {
   if (this->parent_) {
     this->parent_->set_altitude(static_cast<uint16_t>(value));
   }
 }
+#endif
 
 bool SEN5XComponent::start_fan_cleaning() {
   // Per SEN6x datasheet: fan cleaning only runs when measurement is stopped (idle).

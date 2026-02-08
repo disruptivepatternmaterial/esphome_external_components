@@ -3,11 +3,17 @@
 #include "esphome/core/component.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/sensirion_common/i2c_sensirion.h"
-#include "esphome/components/text_sensor/text_sensor.h"
-#include "esphome/components/switch/switch.h"
-#include "esphome/components/number/number.h"
 #include "esphome/core/application.h"
 #include "esphome/core/preferences.h"
+#ifdef SEN6X_USE_DEVICE_STATUS
+#include "esphome/components/text_sensor/text_sensor.h"
+#endif
+#ifdef SEN6X_USE_ASC_SWITCH
+#include "esphome/components/switch/switch.h"
+#endif
+#ifdef SEN6X_USE_ALTITUDE
+#include "esphome/components/number/number.h"
+#endif
 
 namespace esphome {
 namespace sen6x {
@@ -103,21 +109,33 @@ class SEN5XComponent : public PollingComponent, public sensirion_common::Sensiri
     temp_comp.slot = (slot > 4) ? 0 : slot;
     temperature_compensation_ = temp_comp;
   }
+  void perform_forced_co2_recalibration(uint16_t target_ppm);
   bool start_fan_cleaning();
 
+#ifdef SEN6X_USE_DEVICE_STATUS
   void set_device_status_text_sensor(text_sensor::TextSensor *t) { device_status_text_sensor_ = t; }
-  void perform_forced_co2_recalibration(uint16_t target_ppm);
+#endif
+#ifdef SEN6X_USE_ASC_SWITCH
   void set_co2_asc(bool enable);
   void set_asc_switch(switch_::Switch *s) { asc_switch_ = s; }
+#endif
+#ifdef SEN6X_USE_ALTITUDE
   void set_altitude(uint16_t altitude_m);
   void set_altitude_number(number::Number *n) { altitude_number_ = n; }
+#endif
 
  protected:
   bool write_tuning_parameters_(uint16_t i2c_command, const GasTuning &tuning);
   bool write_temperature_compensation_(const TemperatureCompensation &compensation);
+#ifdef SEN6X_USE_DEVICE_STATUS
   std::string format_device_status_(uint32_t status) const;
+#endif
+#ifdef SEN6X_USE_ASC_SWITCH
   bool read_co2_asc_(bool &enabled);
+#endif
+#ifdef SEN6X_USE_ALTITUDE
   bool read_altitude_(uint16_t &altitude_m);
+#endif
   ERRORCODE error_code_;
   bool initialized_{false};
   sensor::Sensor *pm_1_0_sensor_{nullptr};
@@ -132,9 +150,15 @@ class SEN5XComponent : public PollingComponent, public sensirion_common::Sensiri
   // SEN55 only
   sensor::Sensor *nox_sensor_{nullptr};
   sensor::Sensor *co2_sensor_{nullptr};
+#ifdef SEN6X_USE_DEVICE_STATUS
   text_sensor::TextSensor *device_status_text_sensor_{nullptr};
+#endif
+#ifdef SEN6X_USE_ASC_SWITCH
   switch_::Switch *asc_switch_{nullptr};
+#endif
+#ifdef SEN6X_USE_ALTITUDE
   number::Number *altitude_number_{nullptr};
+#endif
 
   std::string product_name_;
   uint8_t serial_number_[4];
@@ -148,6 +172,7 @@ class SEN5XComponent : public PollingComponent, public sensirion_common::Sensiri
   optional<TemperatureCompensation> temperature_compensation_;
 };
 
+#ifdef SEN6X_USE_ASC_SWITCH
 class Sen66ASCSwitch : public switch_::Switch {
  public:
   void set_parent(SEN5XComponent *parent) { parent_ = parent; }
@@ -156,7 +181,9 @@ class Sen66ASCSwitch : public switch_::Switch {
  protected:
   SEN5XComponent *parent_{nullptr};
 };
+#endif
 
+#ifdef SEN6X_USE_ALTITUDE
 class Sen66AltitudeNumber : public number::Number {
  public:
   void set_parent(SEN5XComponent *parent) { parent_ = parent; }
@@ -165,6 +192,7 @@ class Sen66AltitudeNumber : public number::Number {
  protected:
   SEN5XComponent *parent_{nullptr};
 };
+#endif
 
 }  // namespace sen6x
 }  // namespace esphome
