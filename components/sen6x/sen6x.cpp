@@ -22,7 +22,8 @@ static const uint16_t SEN5X_CMD_READ_MEASUREMENT = 0x0300; //SEN66 only!
 static const uint16_t SEN5X_CMD_START_CLEANING_FAN = 0x5607;
 static const uint16_t SEN5X_CMD_START_MEASUREMENTS = 0x0021;
 static const uint16_t SEN5X_CMD_START_MEASUREMENTS_RHT_ONLY = 0x0037; //not used
-static const uint16_t SEN5X_CMD_STOP_MEASUREMENTS = 0x3f86;
+// Per Sensirion embedded-i2c-sen5x/sen66: stop must be 0x0104 before fan cleaning
+static const uint16_t SEN5X_CMD_STOP_MEASUREMENTS = 0x0104;
 static const uint16_t SEN5X_CMD_TEMPERATURE_COMPENSATION = 0x60B2;
 static const uint16_t SEN5X_CMD_VOC_ALGORITHM_STATE = 0x6181;
 static const uint16_t SEN5X_CMD_VOC_ALGORITHM_TUNING = 0x60D0;
@@ -377,13 +378,36 @@ bool SEN5XComponent::write_temperature_compensation_(const TemperatureCompensati
 }
 
 bool SEN5XComponent::start_fan_cleaning() {
-  if (!write_command(SEN5X_CMD_START_CLEANING_FAN)) {
+  // Per SEN6x datasheet: fan cleaning only runs when measurement is stopped (idle).
+  // Sequence: stop measurement -> wait 200 ms -> start fan cleaning -> wait 10 s -> restart measurement.
+  if (!this->write_command(SEN5X_CMD_STOP_MEASUREMENTS)) {
     this->status_set_warning();
-    ESP_LOGE(TAG, "write error start fan (%d)", this->last_error_);
+    ESP_LOGE(TAG, "Fan clean: stop measurement failed (%d)", this->last_error_);
     return false;
-  } else {
-    ESP_LOGD(TAG, "Fan auto clean started");
   }
+  ESP_LOGI(TAG, "Fan cleaning: measurement stopped, starting clean in 200 ms...");
+  this->set_timeout(200, [this]() {
+    if (!this->write_command(SEN5X_CMD_START_CLEANING_FAN)) {
+      this->status_set_warning();
+      ESP_LOGE(TAG, "Fan clean: start cleaning failed (%d)", this->last_error_);
+      return;
+    }
+    ESP_LOGI(TAG, "Fan cleaning in progress; measurement will resume in 10 s");
+    this->set_timeout(10000, [this]() {
+      auto cmd = SEN5X_CMD_START_MEASUREMENTS_RHT_ONLY;
+      if (this->pm_1_0_sensor_ || this->pm_2_5_sensor_ || this->pm_4_0_sensor_ ||
+          this->pm_10_0_sensor_ || this->pm_0_10_sensor_) {
+        cmd = SEN5X_CMD_START_MEASUREMENTS;
+      }
+      if (!this->write_command(cmd)) {
+        this->status_set_warning();
+        ESP_LOGE(TAG, "Fan clean: restart measurement failed (%d)", this->last_error_);
+        return;
+      }
+      this->status_clear_warning();
+      ESP_LOGI(TAG, "Fan cleaning finished, measurement restarted");
+    });
+  });
   return true;
 }
 
