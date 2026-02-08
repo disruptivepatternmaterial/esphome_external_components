@@ -186,14 +186,9 @@ CONFIG_SCHEMA = (
                 Sen66ASCSwitch,
                 icon="mdi:molecule-co2",
             ),
-            cv.Optional(CONF_ALTITUDE): number.NUMBER_SCHEMA.extend(
-                {
-                    cv.GenerateID(): cv.declare_id(Sen66AltitudeNumber),
-                    cv.Optional("min_value", default=0): cv.float_,
-                    cv.Optional("max_value", default=3000): cv.float_,
-                    cv.Optional("step", default=1): cv.positive_float,
-                    cv.Optional("unit_of_measurement", default="m"): cv.string_strict,
-                }
+            cv.Optional(CONF_ALTITUDE): number.number_schema(
+                Sen66AltitudeNumber,
+                unit_of_measurement="m",
             ),
         }
     )
@@ -275,9 +270,9 @@ async def to_code(config):
     if CONF_ALTITUDE in config:
         num = await number.new_number(
             config[CONF_ALTITUDE],
-            min_value=config[CONF_ALTITUDE].get("min_value", 0),
-            max_value=config[CONF_ALTITUDE].get("max_value", 3000),
-            step=config[CONF_ALTITUDE].get("step", 1),
+            min_value=0,
+            max_value=3000,
+            step=1,
         )
         cg.add(num.set_parent(var))
         cg.add(var.set_altitude_number(num))
