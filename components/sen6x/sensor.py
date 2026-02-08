@@ -35,7 +35,7 @@ from esphome.const import (
 )
 
 CODEOWNERS = ["@martgras"]
-DEPENDENCIES = ["i2c"]
+DEPENDENCIES = ["i2c", "switch", "number", "text_sensor"]
 AUTO_LOAD = ["sensirion_common"]
 
 sen6x_ns = cg.esphome_ns.namespace("sen6x")
