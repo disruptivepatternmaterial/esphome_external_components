@@ -35,5 +35,15 @@ template<typename... Ts> class PerformCo2RecalibrationAction : public Action<Ts.
   SEN5XComponent *sen6x_;
 };
 
+template<typename... Ts> class ResetSensorAction : public Action<Ts...> {
+ public:
+  explicit ResetSensorAction(SEN5XComponent *sen6x) : sen6x_(sen6x) {}
+
+  void play(Ts... x) override { this->sen6x_->reset_sensor(); }
+
+ protected:
+  SEN5XComponent *sen6x_;
+};
+
 }  // namespace sen6x
 }  // namespace esphome

@@ -597,5 +597,28 @@ bool SEN5XComponent::start_fan_cleaning() {
   return true;
 }
 
+void SEN5XComponent::reset_sensor() {
+  if (!this->write_command(SEN6X_CMD_RESET)) {
+    this->status_set_warning();
+    ESP_LOGE(TAG, "Reset sensor failed (%d)", this->last_error_);
+    return;
+  }
+  ESP_LOGI(TAG, "Sensor reset; restarting measurements in 1.2 s");
+  this->set_timeout(1200, [this]() {
+    auto cmd = SEN5X_CMD_START_MEASUREMENTS_RHT_ONLY;
+    if (this->pm_1_0_sensor_ || this->pm_2_5_sensor_ || this->pm_4_0_sensor_ ||
+        this->pm_10_0_sensor_ || this->pm_0_10_sensor_) {
+      cmd = SEN5X_CMD_START_MEASUREMENTS;
+    }
+    if (!this->write_command(cmd)) {
+      this->status_set_warning();
+      ESP_LOGE(TAG, "Reset: restart measurement failed (%d)", this->last_error_);
+      return;
+    }
+    this->status_clear_warning();
+    ESP_LOGI(TAG, "Sensor reset complete, measurement restarted");
+  });
+}
+
 }  // namespace sen6x
 }  // namespace esphome

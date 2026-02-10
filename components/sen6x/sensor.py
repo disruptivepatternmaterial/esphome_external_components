@@ -65,6 +65,7 @@ StartFanAction = sen6x_ns.class_("StartFanAction", automation.Action)
 PerformCo2RecalibrationAction = sen6x_ns.class_(
     "PerformCo2RecalibrationAction", automation.Action
 )
+ResetSensorAction = sen6x_ns.class_("ResetSensorAction", automation.Action)
 
 
 
@@ -282,3 +283,13 @@ async def sen6x_co2_recal_to_code(config, action_id, template_arg, args):
     template_ = await cg.templatable(config[CONF_TARGET_PPM], args, float)
     cg.add(var.set_target_ppm(template_))
     return var
+
+
+@automation.register_action(
+    "sen6x.reset_sensor",
+    ResetSensorAction,
+    SEN5X_ACTION_SCHEMA,
+)
+async def sen6x_reset_to_code(config, action_id, template_arg, args):
+    paren = await cg.get_variable(config[CONF_ID])
+    return cg.new_Pvariable(action_id, template_arg, paren)

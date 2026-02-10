@@ -111,6 +111,8 @@ class SEN5XComponent : public PollingComponent, public sensirion_common::Sensiri
   }
   void perform_forced_co2_recalibration(uint16_t target_ppm);
   bool start_fan_cleaning();
+  /** Soft-reset sensor (0xD304) and restart measurements after 1.2 s. Use when readings are stuck or wrong. */
+  void reset_sensor();
 
 #ifdef SEN6X_USE_DEVICE_STATUS
   void set_device_status_text_sensor(text_sensor::TextSensor *t) { device_status_text_sensor_ = t; }
