@@ -321,6 +321,7 @@ void SEN5XComponent::update() {
   if (!this->write_command(SEN5X_CMD_READ_MEASUREMENT)) {
     this->status_set_warning();
     ESP_LOGD(TAG, "write error read measurement (%d)", this->last_error_);
+    this->note_read_failure_();
     return;
   }
   this->set_timeout(20, [this]() {
@@ -329,6 +330,7 @@ void SEN5XComponent::update() {
     if (!this->read_data(measurements, 9)) {
       this->status_set_warning();
       ESP_LOGD(TAG, "read data error (%d)", this->last_error_);
+      this->note_read_failure_();
       return;
     }
     // SEN66 0x0300: cumulative mass concentrations [µg/m³] = value/10
@@ -385,6 +387,7 @@ void SEN5XComponent::update() {
       this->nox_sensor_->publish_state(nox);
     if (this->co2_sensor_ != nullptr)
       this->co2_sensor_->publish_state(co2);
+    this->consecutive_read_failures_ = 0;
     this->status_clear_warning();
 
 #ifdef SEN6X_USE_DEVICE_STATUS
@@ -595,6 +598,42 @@ bool SEN5XComponent::start_fan_cleaning() {
     });
   });
   return true;
+}
+
+void SEN5XComponent::note_read_failure_() {
+  if (this->consecutive_read_failures_ < 0xFF) {
+    this->consecutive_read_failures_++;
+  }
+  if (this->consecutive_read_failures_ == MAX_CONSECUTIVE_READ_FAILURES) {
+    // Publish exactly once on crossing the threshold; further failures keep the
+    // sensors at NaN (already unavailable) without re-spamming the bus/logs.
+    ESP_LOGW(TAG, "%u consecutive read failures (last err %d); marking sensors unavailable (NaN)",
+             this->consecutive_read_failures_, this->last_error_);
+    this->publish_all_nan_();
+  }
+}
+
+void SEN5XComponent::publish_all_nan_() {
+  if (this->pm_1_0_sensor_ != nullptr)
+    this->pm_1_0_sensor_->publish_state(NAN);
+  if (this->pm_2_5_sensor_ != nullptr)
+    this->pm_2_5_sensor_->publish_state(NAN);
+  if (this->pm_4_0_sensor_ != nullptr)
+    this->pm_4_0_sensor_->publish_state(NAN);
+  if (this->pm_10_0_sensor_ != nullptr)
+    this->pm_10_0_sensor_->publish_state(NAN);
+  if (this->pm_0_10_sensor_ != nullptr)
+    this->pm_0_10_sensor_->publish_state(NAN);
+  if (this->temperature_sensor_ != nullptr)
+    this->temperature_sensor_->publish_state(NAN);
+  if (this->humidity_sensor_ != nullptr)
+    this->humidity_sensor_->publish_state(NAN);
+  if (this->voc_sensor_ != nullptr)
+    this->voc_sensor_->publish_state(NAN);
+  if (this->nox_sensor_ != nullptr)
+    this->nox_sensor_->publish_state(NAN);
+  if (this->co2_sensor_ != nullptr)
+    this->co2_sensor_->publish_state(NAN);
 }
 
 void SEN5XComponent::reset_sensor() {

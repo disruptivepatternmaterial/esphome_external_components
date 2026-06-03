@@ -32,6 +32,11 @@ enum ERRORCODE {
 const uint32_t SHORTEST_BASELINE_STORE_INTERVAL = 10800;
 // Store anyway if the baseline difference exceeds the max storage diff value
 const uint32_t MAXIMUM_STORAGE_DIFF = 50;
+// After this many consecutive failed reads, publish NaN so downstream consumers
+// see the sensor as unavailable instead of a frozen last value. This also lets a
+// NaN-based reboot watchdog in the device YAML fire, which is the only way to
+// recover a wedged I2C bus (a soft reset travels over the same dead bus).
+const uint8_t MAX_CONSECUTIVE_READ_FAILURES = 3;
 
 struct Sen5xBaselines {
   int32_t state0;
@@ -127,6 +132,11 @@ class SEN5XComponent : public PollingComponent, public sensirion_common::Sensiri
 #endif
 
  protected:
+  // Track consecutive failed measurement reads and, once over threshold, publish
+  // NaN to every sensor so a wedged I2C bus surfaces as "unavailable".
+  void note_read_failure_();
+  void publish_all_nan_();
+  uint8_t consecutive_read_failures_{0};
   bool write_tuning_parameters_(uint16_t i2c_command, const GasTuning &tuning);
   bool write_temperature_compensation_(const TemperatureCompensation &compensation);
 #ifdef SEN6X_USE_DEVICE_STATUS
