@@ -89,8 +89,12 @@ sensor:
     lambda: |-
       return id(sen66_pm10).state + id(sen66_pm25).state + id(sen66_pm40).state + id(sen66_pm100).state;
     
-  - platform: template  
-    name: "TVOC (Mølhave)"
+  # WARNING: This is a rough estimate only. Sensirion explicitly warns against converting
+  # the VOC Index back to an absolute concentration. The VOC Index is a relative metric
+  # (baseline 100 = 24h average); this inverse Molhave transform has no calibration
+  # validity. Consider removing this sensor and using the VOC Index directly.
+  - platform: template
+    name: "TVOC Estimate (Mølhave, unreliable)"
     id: sen66_tvoc
     unit_of_measurement: "mg/m³"
     accuracy_decimals: 2
@@ -103,12 +107,12 @@ sensor:
       return ((log(501 - voc_index) - 6.24) * (-996.94)) * 0.001;
 
   - platform: template
-    name: "IAQ Index"
-    id: iaq_index
-    unit_of_measurement: "IAQ"
+    name: "SEN6x Pollution Score"
+    id: sen6x_pollution_score
+    unit_of_measurement: "score"
     accuracy_decimals: 0
     lambda: |-
-      float iaq = 100.0; // Start value for good air quality
+      float iaq = 100.0; // Start value (100 = clean); penalties add up toward 400 (worst)
 
       // CO2 contribution (400-1500 ppm is optimal, >2000 ppm is bad)
       float co2 = id(sen66_co2).state;
